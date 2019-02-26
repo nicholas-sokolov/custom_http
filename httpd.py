@@ -1,4 +1,4 @@
-from httplib.connection import HTTPConnection
+from src.server import Server
 
 if __name__ == '__main__':
-    s = HTTPConnection('localhost', 80)
+    s = Server('localhost', 80)

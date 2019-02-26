@@ -23,7 +23,7 @@ ERRORS = {
 }
 
 
-class HTTPConnection:
+class Server:
 
     SUPPORTED_METHODS = [GET, HEAD]
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 
+import http.client
 import re
 import socket
 import unittest
-
-import httplib
 
 
 class HttpServer(unittest.TestCase):
@@ -12,7 +11,7 @@ class HttpServer(unittest.TestCase):
     port = 80
 
     def setUp(self):
-        self.conn = httplib.HTTPConnection(self.host, self.port, timeout=10)
+        self.conn = http.client.HTTPConnection(self.host, self.port, timeout=10)
 
     def tearDown(self):
         self.conn.close()
@@ -21,7 +20,7 @@ class HttpServer(unittest.TestCase):
         """ Send bad http headers """
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((self.host, self.port))
-        s.sendall("\n")
+        s.sendall(b"\n")
         s.close()
 
     def test_server_header(self):
@@ -148,7 +147,7 @@ class HttpServer(unittest.TestCase):
 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((self.host, self.port))
-        s.send("HEAD /httptest/dir2/page.html HTTP/1.0\r\n\r\n")
+        s.send(b"HEAD /httptest/dir2/page.html HTTP/1.0\r\n\r\n")
         data = ""
         while 1:
             buf = s.recv(1024)
