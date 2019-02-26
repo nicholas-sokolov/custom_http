@@ -30,9 +30,10 @@ ERRORS = {
 class Server:
     SUPPORTED_METHODS = [GET, HEAD]
 
-    def __init__(self, host, port, timeout=10, bind_and_activate=True):
+    def __init__(self, host, port, document_root, timeout=10, bind_and_activate=True):
         self.host = host
         self.port = port
+        self.document_root = document_root
         self.timeout = timeout
         self.error = OK
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -45,7 +46,7 @@ class Server:
 
     def server_activate(self, poll_interval=0.5):
         self.socket.listen(0)
-        server_logger.info("Listener was started on {} {}".format(self.host, self.port))
+        server_logger.info("Listener was started on {}:{}".format(self.host, self.port))
         self.socket.setblocking(False)
         select.register(self.socket, selectors.EVENT_READ)
 
