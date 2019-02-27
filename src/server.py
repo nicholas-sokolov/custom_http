@@ -5,6 +5,8 @@ import socket
 import time
 import types
 
+from src.handler import CustomHTTPHandler
+
 select = selectors.DefaultSelector()
 
 logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s',
@@ -12,35 +14,19 @@ logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s',
                     level=logging.INFO)
 server_logger = logging.getLogger('server')
 
-GET = 'GET'
-HEAD = 'HEAD'
-OK = 200
-BAD_REQUEST = 400
-FORBIDDEN = 403
-NOT_FOUND = 404
-INVALID_REQUEST = 422
-INTERNAL_ERROR = 500
-ERRORS = {
-    BAD_REQUEST: "Bad Request",
-    FORBIDDEN: "Forbidden",
-    NOT_FOUND: "Not Found",
-    INVALID_REQUEST: "Invalid Request",
-    INTERNAL_ERROR: "Internal Server Error",
-}
-
 
 class Server:
-    SUPPORTED_METHODS = [GET, HEAD]
 
-    def __init__(self, host, port, document_root, timeout=10, bind_and_activate=True):
+    def __init__(self, host, port, document_root, timeout=10, bind_and_activate=True, http_handler=CustomHTTPHandler):
         self.host = host
         self.port = port
         self.document_root = document_root
         self.timeout = timeout
-        self.error = OK
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
         self._headers_buffer = []
+        self._handler_class = CustomHTTPHandler
+        self._handler = None
         if bind_and_activate:
             self.server_bind()
             self.server_activate()
@@ -89,32 +75,8 @@ class Server:
         if mask & selectors.EVENT_WRITE:
             if data.outb:
                 server_logger.info('Echoing {} to {}'.format(repr(data.outb), data.addr))
-                self.response(data.outb)
-
-    def response(self, byte_data):
-        # TODO: Headers: Connection, Content‑Length, Content‑Type
-        # TODO: Content‑Type for .html, .css, .js, .jpg, .jpeg, .png, .gif, .swf
-        self.send_header('Server', 'MyCustomServer 0.1')
-        self.send_header('Date', email.utils.formatdate(time.time(), usegmt=True))
-
-        data_list = byte_data.decode().split('\r\n')
-        if not data_list:
-            raise Exception('No list!!!!')
-        elif not data_list[0].strip():
-            return
-
-        method, url, version = data_list[0].split()
-
-        if method not in self.SUPPORTED_METHODS:
-            raise Exception('No such method!!!!')
-        if url.endswith('/'):
-            pass
-        else:
-            pass
-
-    def send_header(self, keyword, value):
-        """Send a MIME header to the headers buffer."""
-        self._headers_buffer.append("{}: {}\r\n".format(keyword, value))
+                self._handler = self._handler_class(sock, data.outb, self.document_root)
+                self._handler.response()
 
     def close(self):
         self.socket.close()
