@@ -47,31 +47,38 @@ class CustomHTTPHandler:
     SUPPORTED_METHODS = [GET, HEAD]
 
     def __init__(self, socket, request_data, directory):
-        self.socket = socket
+        # self.socket = socket
         self.request_data = request_data
         self.directory = directory
         self._headers_buffer = []
-        self.wfile = self.socket.write('wb')
+        self.wfile = socket.makefile('wb')
 
     def parse_request(self):
         pass
 
-    def do_get(self):
-        code = 200
-        body = None
-        if (code >= 200 and
-                code not in (HTTPStatus.NO_CONTENT,
-                             HTTPStatus.RESET_CONTENT,
-                             HTTPStatus.NOT_MODIFIED)):
-            # HTML encode to prevent Cross Site Scripting attacks
-            # (see bug #1100201)
-            content = (self.error_message_format % {
-                'code': code,
-                'message': html.escape(message, quote=False),
-                'explain': html.escape(explain, quote=False)
-            })
+    def do_get(self, url):
+        """ GET method
+
+        :param str url:
+        :return:
+        """
+        index_file = 'index.html'
+
+        if url.endswith('/'):
+            url = url[1:] + index_file
+
+        path = '/'.join(self.directory.split('\\') + url.split('/'))
+        if os.path.exists(path):
+            code = HTTPStatus.OK
+        else:
+            code = HTTPStatus.NOT_FOUND
+
+        body = b''
+        if code == HTTPStatus.OK:
+            with open(path) as f:
+                content = ' '.join(f.readlines())
             body = content.encode('UTF-8', 'replace')
-            self.send_header("Content-Type", self.error_content_type)
+            # TODO: self.send_header("Content-Type", '')
             self.send_header('Content-Length', str(len(body)))
         self.wfile.write(body)
 
@@ -86,12 +93,7 @@ class CustomHTTPHandler:
         if method not in self.SUPPORTED_METHODS:
             raise Exception('No such method!!!!')
         elif method == GET:
-            self.do_GET()
-
-        if url.endswith('/'):
-            pass
-        else:
-            pass
+            self.do_get(url)
 
     def send_response_only(self, code, message=''):
         self._headers_buffer.append(("%s %d %s\r\n" % ("HTTP/1.0", code, message)).encode('latin-1', 'strict'))
