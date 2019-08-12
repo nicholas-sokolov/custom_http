@@ -17,4 +17,4 @@ if __name__ == '__main__':
                         nargs='?',
                         help='Specify alternate port [default: 8000]')
     args = parser.parse_args()
-    s = Server(args.bind, args.port, args.r)
+    s = Server(args.bind, args.port)
