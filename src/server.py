@@ -1,8 +1,11 @@
 import email.utils
 import logging
-import selectors
+import select
 import socket
 import time
+import os
+import shutil
+from socketserver import _SocketWriter
 
 SERVER_NAME = 'MyCustomServer 0.1'
 HTTP_VERSION = 'HTTP/1.1'
@@ -43,48 +46,71 @@ DEFAULT_ERROR_MESSAGE = """\
 </html>
 """
 
-select = selectors.DefaultSelector()
-
 logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s',
                     datefmt='%Y.%m.%d %H:%M:%S',
                     level=logging.INFO)
 
 
 class Server:
-    def __init__(self, host, port, handler, timeout=10, bind_and_activate=True):
-        self.host = host
-        self.port = port
+    def __init__(self, server_address: tuple, handler, timeout=10, connect_now=True):
+        self.server_address = server_address
         self.handler = handler
         self.document_root = None
         self.timeout = timeout
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if bind_and_activate:
-            self.server_bind_and_activate()
+        self._socket = None
+        if connect_now:
+            try:
+                self.connect()
+            except:
+                self.close()
+                raise
 
-    def server_bind_and_activate(self):
+    def connect(self):
         try:
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.sock.bind((self.host, self.port))
-            self.sock.listen(5)
-            logging.info(f'Server activated on {self.host}:{self.port}')
-        except socket.error as err:
-            logging.error(f'{err}')
-            raise Exception(err)
+            if self._socket:
+                self.close()
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.bind(self.server_address)
+            self.server_address = self._socket.getsockname()
+            self._socket.listen(5)
+            logging.info(f'Server activated on {self.server_address}')
+        except socket.error as e:
+            # TODO: catch this error and retry
+            logging.error(f'{e}')
+            raise e
 
-    def serve_forever(self):
+    def close(self):
+        if self._socket:
+            self._socket.close()
+        self._socket = None
+
+    def fileno(self):
+        return self._socket.fileno()
+
+    def serve_forever(self, poll_interval=0.5):
         while True:
             try:
-                conn, addr = self.sock.accept()
-                self.handler(conn, addr)
+                r, w, e = select.select([self], [], [], poll_interval)
+                if self in r:
+                    self.handle_request()
             except socket.error as err:
                 logging.error(f'{err}')
-                self.sock.close()
+                self._socket.close()
+
+    def handle_request(self):
+        request, client_address = self._socket.accept()
+        self.handler(request, client_address)
 
 
 class CustomHTTPHandler:
     def __init__(self, connection, address):
         self.connection = connection
         self.request_address = address
+        self.rfile = self.connection.makefile('rb', -1)
+        self.wfile = _SocketWriter(self.connection)
+        self.directory = os.getcwd()
+
         self.method = None
         self.path = None
         self.body = ''
@@ -95,11 +121,9 @@ class CustomHTTPHandler:
         self.handle_request()
 
     def handle_request(self):
-        while True:
-            data = self.connection.recv(BUFFER_SIZE)
-            if not data:
-                break
-            self.raw_request_line += data
+        self.raw_request_line = self.rfile.readline(65537)
+        if not self.raw_request_line:
+            return
         code = self.parse_request()
         self.response(code)
 
@@ -111,12 +135,16 @@ class CustomHTTPHandler:
 
         if len(words) != 3:
             return BAD_REQUEST
-        method, url, version = words
+        method, self.url, version = words
+
         if method not in SUPPORTED_METHODS:
             return NOT_FOUND
 
         self.parse_headers(self.raw_request_line)
-        # TODO: 'Connection' handler
+
+        if method == GET:
+            self.do_GET()
+
         return OK
 
     def parse_headers(self, request_data: bytes):
@@ -126,6 +154,31 @@ class CustomHTTPHandler:
                 continue
             key, value = line.split(':')
             self._request_headers[key] = value.strip()
+
+    def send_head(self):
+        path = self.directory
+
+        words = self.url.split('/')
+        words = filter(None, words)
+        for word in words:
+            path = os.path.join(path, word)
+
+        if not os.path.exists(path):
+            raise Exception()
+        if os.path.isdir(path):
+            for index in "index.html", "index.htm":
+                index = os.path.join(path, index)
+                if os.path.exists(index):
+                    path = index
+                    break
+        try:
+            f = open(path, 'rb')
+        except OSError:
+            self.response(NOT_FOUND)
+            return None
+        fs = os.fstat(f.fileno())
+        self.send_header("Content-Length", str(fs[6]))
+        return f
 
     def response(self, code):
         """ Prepare headers for response and response """
@@ -147,10 +200,21 @@ class CustomHTTPHandler:
 
     def end_headers(self):
         """Send the blank line ending the MIME headers."""
-        self._response_headers_buffer.append(b"\r\n")
+        self._response_headers_buffer.append(b"\r\n\r\n")
         self.flush_headers()
 
     def flush_headers(self):
         response_data = b''.join(self._response_headers_buffer)
-        self.connection.send(response_data)
+        self.connection.sendall(response_data)
+        self.connection.close()
         self._response_headers_buffer = []
+
+    def do_GET(self):
+        file = self.send_head()
+        if not file:
+            return
+        try:
+            shutil.copyfileobj(file, self.wfile)
+        finally:
+            file.close()
+

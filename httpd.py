@@ -18,5 +18,6 @@ if __name__ == '__main__':
                         nargs='?',
                         help='Specify alternate port [default: 8000]')
     args = parser.parse_args()
-    server = Server(args.bind, args.port, CustomHTTPHandler)
+    server_address = args.bind, args.port
+    server = Server(server_address, CustomHTTPHandler)
     server.serve_forever()
