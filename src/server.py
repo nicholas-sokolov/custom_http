@@ -113,39 +113,63 @@ class CustomHTTPHandler:
 
         self.method = None
         self.path = None
+        self.request_version = None
+        self.close_connection = True
         self.body = ''
         self.raw_request_line = b''
         # TODO: Need use and clean
         self._request_headers = {}
         self._response_headers_buffer = []
+        self.handle()
+
+    def handle(self):
         self.handle_request()
+        while not self.close_connection:
+            self.handle_request()
 
     def handle_request(self):
         self.raw_request_line = self.rfile.readline(65537)
+        if len(self.raw_request_line) > 65536:
+            # TODO: send error
+            return
         if not self.raw_request_line:
             return
-        code = self.parse_request()
-        self.response(code)
+        if not self.parse_request():
+            return
+        if self.method not in SUPPORTED_METHODS:
+            return
+
+        mname = f'do_{self.method}'
+        if not hasattr(self, mname):
+            # TODO: send HTTPStatus.NOT_IMPLEMENTED
+            return
+        method = getattr(self, mname)
+        method()
+        self.wfile.flush()
 
     def parse_request(self):
-        if not self.raw_request_line:
-            return False
         request_lines = self.raw_request_line.decode().split('\r\n')
         words = request_lines[0].split()
 
-        if len(words) != 3:
-            return BAD_REQUEST
-        method, self.url, version = words
-
-        if method not in SUPPORTED_METHODS:
-            return NOT_FOUND
+        if len(words) == 3:
+            self.method, self.path, self.request_version = words
+        elif len(words) == 2:
+            self.method, self.path = words
+        elif not words:
+            return False
+        else:
+            # TODO: send BAD_REQUEST
+            return False
 
         self.parse_headers(self.raw_request_line)
 
-        if method == GET:
-            self.do_GET()
+        conntype = self._request_headers.get('Connection', "")
+        if conntype.lower() == 'close':
+            self.close_connection = True
+        elif conntype.lower() == 'keep-alive':
+            self.close_connection = False
 
-        return OK
+        return True
 
     def parse_headers(self, request_data: bytes):
         request_lines = request_data.decode().split('\r\n')
@@ -158,13 +182,13 @@ class CustomHTTPHandler:
     def send_head(self):
         path = self.directory
 
-        words = self.url.split('/')
+        words = self.path.split('/')
         words = filter(None, words)
         for word in words:
             path = os.path.join(path, word)
 
         if not os.path.exists(path):
-            raise Exception()
+            self.response(NOT_FOUND)
         if os.path.isdir(path):
             for index in "index.html", "index.htm":
                 index = os.path.join(path, index)
@@ -172,13 +196,33 @@ class CustomHTTPHandler:
                     path = index
                     break
         try:
+            print(path)
             f = open(path, 'rb')
         except OSError:
             self.response(NOT_FOUND)
             return None
-        fs = os.fstat(f.fileno())
-        self.send_header("Content-Length", str(fs[6]))
-        return f
+
+        try:
+            self.send_response(OK)
+            self.send_header("Content-type", '3232')
+            fs = os.fstat(f.fileno())
+            self.send_header("Content-Length", str(fs.st_size))
+            # self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+            self.end_headers()
+            print('ewew')
+            return f
+        except:
+            f.close()
+            raise
+
+    def send_response(self, code, message=None):
+        if message is None:
+            message = RESPONSE[code]
+        response = "{} {} {}\r\n".format(HTTP_VERSION, code, message)
+        self._response_headers_buffer.append(response.encode('latin-1', 'strict'))
+
+        self.send_header('Server', SERVER_NAME)
+        self.send_header('Date', email.utils.formatdate(time.time(), usegmt=True))
 
     def response(self, code):
         """ Prepare headers for response and response """
