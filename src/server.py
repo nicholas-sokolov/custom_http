@@ -133,15 +133,17 @@ class CustomHTTPHandler:
             # TODO: send error
             return
         if not self.raw_request_line:
+            self.close_connection = True
             return
         if not self.parse_request():
             return
-        if self.method not in SUPPORTED_METHODS:
-            return
+        # if self.method not in SUPPORTED_METHODS:
+        #     return
 
         mname = f'do_{self.method}'
         if not hasattr(self, mname):
             # TODO: send HTTPStatus.NOT_IMPLEMENTED
+            self.response(BAD_REQUEST)
             return
         method = getattr(self, mname)
         method()
@@ -159,6 +161,7 @@ class CustomHTTPHandler:
             return False
         else:
             # TODO: send BAD_REQUEST
+            self.send_response(BAD_REQUEST)
             return False
 
         self.parse_headers(self.raw_request_line)
@@ -180,12 +183,23 @@ class CustomHTTPHandler:
             self._request_headers[key] = value.strip()
 
     def send_head(self):
-        path = self.directory
+        # path = self.directory
+        import urllib
+        import posixpath
+        path = self.path.split('?', 1)[0]
+        path = path.split('#', 1)[0]
 
-        words = self.path.split('/')
+        path = urllib.parse.unquote(path)
+        path = posixpath.normpath(path)
+
+        words = path.split('/')
         words = filter(None, words)
+        path = ''
         for word in words:
             path = os.path.join(path, word)
+        if self.path.rstrip().endswith('/'):
+            path += os.path.sep
+        path = os.path.join(self.directory, path)
 
         if not os.path.exists(path):
             self.response(NOT_FOUND)
@@ -195,6 +209,14 @@ class CustomHTTPHandler:
                 if os.path.exists(index):
                     path = index
                     break
+
+        import mimetypes
+        base, ext = posixpath.splitext(path)
+        extensions_map = mimetypes.types_map.copy()
+        ctype = 'application/octet-stream'
+        if ext in extensions_map:
+            ctype = extensions_map[ext]
+
         try:
             print(path)
             f = open(path, 'rb')
@@ -204,7 +226,8 @@ class CustomHTTPHandler:
 
         try:
             self.send_response(OK)
-            self.send_header("Content-type", '3232')
+
+            self.send_header("Content-type", ctype)
             fs = os.fstat(f.fileno())
             self.send_header("Content-Length", str(fs.st_size))
             # self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
@@ -239,18 +262,16 @@ class CustomHTTPHandler:
         self._response_headers_buffer.append(response.encode('latin-1', 'strict'))
 
     def send_header(self, keyword, value):
-        line = f'{keyword}: {value}'.encode()
+        line = f'{keyword}: {value}\r\n'.encode()
         self._response_headers_buffer.append(line)
 
     def end_headers(self):
         """Send the blank line ending the MIME headers."""
-        self._response_headers_buffer.append(b"\r\n\r\n")
+        self._response_headers_buffer.append(b"\r\n")
         self.flush_headers()
 
     def flush_headers(self):
-        response_data = b''.join(self._response_headers_buffer)
-        self.connection.sendall(response_data)
-        self.connection.close()
+        self.wfile.write(b"".join(self._response_headers_buffer))
         self._response_headers_buffer = []
 
     def do_GET(self):
@@ -260,5 +281,11 @@ class CustomHTTPHandler:
         try:
             shutil.copyfileobj(file, self.wfile)
         finally:
+            file.close()
+
+    def do_HEAD(self):
+        """Serve a HEAD request."""
+        file = self.send_head()
+        if file:
             file.close()
 
