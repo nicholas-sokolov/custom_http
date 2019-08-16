@@ -1,10 +1,13 @@
 import email.utils
 import logging
+import mimetypes
+import os
+import posixpath
 import select
+import shutil
 import socket
 import time
-import os
-import shutil
+import urllib
 from socketserver import _SocketWriter
 
 SERVER_NAME = 'MyCustomServer 0.1'
@@ -17,6 +20,7 @@ OK = 200
 BAD_REQUEST = 400
 FORBIDDEN = 403
 NOT_FOUND = 404
+METHOD_NOT_ALLOWED = 405
 INVALID_REQUEST = 422
 INTERNAL_ERROR = 500
 RESPONSE = {
@@ -24,6 +28,7 @@ RESPONSE = {
     BAD_REQUEST: "Bad Request",
     FORBIDDEN: "Forbidden",
     NOT_FOUND: "Not Found",
+    METHOD_NOT_ALLOWED: "Method Not Allowed",
     INVALID_REQUEST: "Invalid Request",
     INTERNAL_ERROR: "Internal Server Error",
 }
@@ -52,10 +57,10 @@ logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s',
 
 
 class Server:
-    def __init__(self, server_address: tuple, handler, timeout=10, connect_now=True):
+    def __init__(self, server_address: tuple, handler, document_root=None, timeout=10, connect_now=True):
         self.server_address = server_address
         self.handler = handler
-        self.document_root = None
+        self.document_root = document_root
         self.timeout = timeout
         self._socket = None
         if connect_now:
@@ -100,24 +105,22 @@ class Server:
 
     def handle_request(self):
         request, client_address = self._socket.accept()
-        self.handler(request, client_address)
+        self.handler(request, client_address, self.document_root)
 
 
 class CustomHTTPHandler:
-    def __init__(self, connection, address):
+    def __init__(self, connection, address, directory):
         self.connection = connection
         self.request_address = address
+        self.directory = directory or os.getcwd()
+
         self.rfile = self.connection.makefile('rb', -1)
         self.wfile = _SocketWriter(self.connection)
-        self.directory = os.getcwd()
-
         self.method = None
         self.path = None
         self.request_version = None
         self.close_connection = True
-        self.body = ''
         self.raw_request_line = b''
-        # TODO: Need use and clean
         self._request_headers = {}
         self._response_headers_buffer = []
         self.handle()
@@ -130,20 +133,17 @@ class CustomHTTPHandler:
     def handle_request(self):
         self.raw_request_line = self.rfile.readline(65537)
         if len(self.raw_request_line) > 65536:
-            # TODO: send error
             return
         if not self.raw_request_line:
             self.close_connection = True
             return
         if not self.parse_request():
             return
-        # if self.method not in SUPPORTED_METHODS:
-        #     return
 
         mname = f'do_{self.method}'
         if not hasattr(self, mname):
-            # TODO: send HTTPStatus.NOT_IMPLEMENTED
-            self.response(BAD_REQUEST)
+            self.send_response(METHOD_NOT_ALLOWED)
+            self.flush_headers()
             return
         method = getattr(self, mname)
         method()
@@ -160,7 +160,6 @@ class CustomHTTPHandler:
         elif not words:
             return False
         else:
-            # TODO: send BAD_REQUEST
             self.send_response(BAD_REQUEST)
             return False
 
@@ -183,9 +182,6 @@ class CustomHTTPHandler:
             self._request_headers[key] = value.strip()
 
     def send_head(self):
-        # path = self.directory
-        import urllib
-        import posixpath
         path = self.path.split('?', 1)[0]
         path = path.split('#', 1)[0]
 
@@ -202,7 +198,9 @@ class CustomHTTPHandler:
         path = os.path.join(self.directory, path)
 
         if not os.path.exists(path):
-            self.response(NOT_FOUND)
+            self.send_response(NOT_FOUND)
+            self.flush_headers()
+            return
         if os.path.isdir(path):
             for index in "index.html", "index.htm":
                 index = os.path.join(path, index)
@@ -210,7 +208,6 @@ class CustomHTTPHandler:
                     path = index
                     break
 
-        import mimetypes
         base, ext = posixpath.splitext(path)
         extensions_map = mimetypes.types_map.copy()
         ctype = 'application/octet-stream'
@@ -218,11 +215,11 @@ class CustomHTTPHandler:
             ctype = extensions_map[ext]
 
         try:
-            print(path)
             f = open(path, 'rb')
         except OSError:
-            self.response(NOT_FOUND)
-            return None
+            self.send_response(NOT_FOUND)
+            self.flush_headers()
+            return
 
         try:
             self.send_response(OK)
@@ -232,7 +229,6 @@ class CustomHTTPHandler:
             self.send_header("Content-Length", str(fs.st_size))
             # self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
             self.end_headers()
-            print('ewew')
             return f
         except:
             f.close()
@@ -246,20 +242,6 @@ class CustomHTTPHandler:
 
         self.send_header('Server', SERVER_NAME)
         self.send_header('Date', email.utils.formatdate(time.time(), usegmt=True))
-
-    def response(self, code):
-        """ Prepare headers for response and response """
-        logging.info(f'Response Code:{code}')
-        self.send_simple_response(code, HTTP_VERSION, RESPONSE[code])
-        # TODO: Headers: Connection
-        # TODO: Content‑Type for .html, .css, .js, .jpg, .jpeg, .png, .gif, .swf
-        self.send_header('Server', SERVER_NAME)
-        self.send_header('Date', email.utils.formatdate(time.time(), usegmt=True))
-        self.end_headers()
-
-    def send_simple_response(self, code, version, message=''):
-        response = "{} {} {}\r\n".format(version, code, message)
-        self._response_headers_buffer.append(response.encode('latin-1', 'strict'))
 
     def send_header(self, keyword, value):
         line = f'{keyword}: {value}\r\n'.encode()
@@ -288,4 +270,3 @@ class CustomHTTPHandler:
         file = self.send_head()
         if file:
             file.close()
-
