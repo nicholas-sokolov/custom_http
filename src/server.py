@@ -8,6 +8,7 @@ import shutil
 import socket
 import time
 import urllib
+import threading
 from socketserver import _SocketWriter
 
 SERVER_NAME = 'MyCustomServer 0.1'
@@ -105,7 +106,10 @@ class Server:
 
     def handle_request(self):
         request, client_address = self._socket.accept()
-        self.handler(request, client_address, self.document_root)
+        t = threading.Thread(target=self.handler, args=(request, client_address, self.document_root))
+        t.daemon = True
+        t.start()
+        logging.info('Request')
 
 
 class CustomHTTPHandler:

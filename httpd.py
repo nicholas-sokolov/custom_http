@@ -1,9 +1,29 @@
 import os
-
+import multiprocessing
+import argparse
 from src.server import Server, CustomHTTPHandler
 
+def start_server(address, workers):
+    servers = []
+    try:
+        for worker in range(workers):
+            server = Server(address, CustomHTTPHandler)
+            p = multiprocessing.Process(target=server.serve_forever)
+            servers.append(p)
+            p.start()
+        for proc in servers:
+            proc.join()
+    except KeyboardInterrupt:
+        for process in servers:
+            if not process:
+                continue
+            pid = process.pid
+            print(pid)
+            process.terminate()
+            print('rewrwe')
+
+
 if __name__ == '__main__':
-    import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-w', help='Number of workers')
@@ -19,5 +39,4 @@ if __name__ == '__main__':
                         help='Specify alternate port [default: 8000]')
     args = parser.parse_args()
     server_address = args.bind, args.port
-    server = Server(server_address, CustomHTTPHandler)
-    server.serve_forever()
+    start_server(server_address, int(args.w))
